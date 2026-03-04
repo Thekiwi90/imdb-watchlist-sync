@@ -1,0 +1,12 @@
+services:
+  imdb-sync:
+    image: imdb-sync
+    container_name: imdb_sync
+    restart: unless-stopped
+    ports:
+      - "5050:5000"
+    volumes:
+      - imdb-sync-data:/app/data
+
+volumes:
+  imdb-sync-data:

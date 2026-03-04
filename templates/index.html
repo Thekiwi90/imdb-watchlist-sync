@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IMDb Sync</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #1a1a2e; color: #e0e0e0; min-height: 100vh; }
+        .container { max-width: 700px; margin: 0 auto; padding: 2rem 1rem; }
+        h1 { text-align: center; margin-bottom: 2rem; color: #f5c518; font-size: 1.5rem; }
+        h1 span { color: #e0e0e0; font-weight: 300; }
+        .card { background: #16213e; border-radius: 12px; padding: 1.5rem; margin-bottom: 1.5rem; }
+        .card.disabled { opacity: 0.4; }
+        .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
+        .card-header h2 { margin-bottom: 0; }
+        .card h2 { font-size: 1rem; margin-bottom: 1rem; color: #a0a0b8; text-transform: uppercase; letter-spacing: 0.05em; }
+        .field { margin-bottom: 1rem; }
+        .field:last-child { margin-bottom: 0; }
+        label { display: block; font-size: 0.85rem; color: #8888a0; margin-bottom: 0.3rem; }
+        input[type="text"], input[type="number"], input[type="password"], select {
+            width: 100%; padding: 0.6rem 0.8rem; background: #0f3460; border: 1px solid #1a4a7a;
+            border-radius: 8px; color: #e0e0e0; font-size: 0.95rem; outline: none; transition: border-color 0.2s;
+        }
+        input:focus, select:focus { border-color: #f5c518; }
+        select option { background: #0f3460; color: #e0e0e0; }
+        .row { display: flex; gap: 1rem; }
+        .row .field { flex: 1; }
+        .actions { display: flex; gap: 0.75rem; justify-content: center; margin-top: 0.5rem; }
+        button {
+            padding: 0.7rem 1.5rem; border: none; border-radius: 8px; font-size: 0.95rem;
+            cursor: pointer; font-weight: 600; transition: opacity 0.2s;
+        }
+        button:hover { opacity: 0.85; }
+        .btn-save { background: #f5c518; color: #1a1a2e; }
+        .btn-sync { background: #0f3460; color: #e0e0e0; border: 1px solid #1a4a7a; }
+        .btn-fetch { background: #1a4a7a; color: #e0e0e0; font-size: 0.8rem; padding: 0.4rem 0.8rem; margin-top: 0.5rem; }
+        .status { text-align: center; margin-top: 1rem; font-size: 0.9rem; min-height: 1.4em; }
+        .status.ok { color: #4ecca3; }
+        .status.err { color: #e74c3c; }
+        .log-box {
+            background: #0a0a1a; border-radius: 8px; padding: 1rem; font-family: 'SF Mono', Monaco, Consolas, monospace;
+            font-size: 0.8rem; max-height: 300px; overflow-y: auto; white-space: pre-wrap; line-height: 1.5; color: #8888a0;
+        }
+        /* Toggle switch */
+        .toggle { position: relative; display: inline-block; width: 44px; height: 24px; }
+        .toggle input { opacity: 0; width: 0; height: 0; }
+        .toggle .slider {
+            position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+            background: #0f3460; border-radius: 24px; transition: 0.3s;
+        }
+        .toggle .slider::before {
+            content: ""; position: absolute; height: 18px; width: 18px; left: 3px; bottom: 3px;
+            background: #8888a0; border-radius: 50%; transition: 0.3s;
+        }
+        .toggle input:checked + .slider { background: #4ecca3; }
+        .toggle input:checked + .slider::before { transform: translateX(20px); background: #fff; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1><span>IMDb →</span> Sonarr / Radarr <span>Sync</span></h1>
+
+        <form id="configForm">
+            <div class="card">
+                <h2>IMDb</h2>
+                <div class="field">
+                    <label for="imdb_user_id">User ID</label>
+                    <input type="text" id="imdb_user_id" name="imdb_user_id" placeholder="ur12345678" value="{{ config.imdb_user_id }}">
+                </div>
+            </div>
+
+            <div class="card" id="sonarr_card">
+                <div class="card-header">
+                    <h2>Sonarr</h2>
+                    <label class="toggle">
+                        <input type="checkbox" id="sonarr_enabled" name="sonarr_enabled" {{ 'checked' if config.sonarr_enabled else '' }} onchange="toggleCard('sonarr')">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <div id="sonarr_fields">
+                    <div class="field">
+                        <label for="sonarr_url">URL</label>
+                        <input type="text" id="sonarr_url" name="sonarr_url" placeholder="http://sonarr:8989" value="{{ config.sonarr_url }}">
+                    </div>
+                    <div class="field">
+                        <label for="sonarr_api_key">API Key</label>
+                        <input type="password" id="sonarr_api_key" name="sonarr_api_key" placeholder="API key" value="{{ config.sonarr_api_key }}">
+                    </div>
+                    <button type="button" class="btn-fetch" onclick="fetchOptions('sonarr')">Connect & load options</button>
+                    <div class="row" style="margin-top: 1rem;">
+                        <div class="field">
+                            <label for="sonarr_root_folder">Root Folder</label>
+                            <select id="sonarr_root_folder" name="sonarr_root_folder">
+                                <option value="{{ config.sonarr_root_folder }}">{{ config.sonarr_root_folder }}</option>
+                            </select>
+                        </div>
+                        <div class="field">
+                            <label for="sonarr_quality_profile_id">Quality Profile</label>
+                            <select id="sonarr_quality_profile_id" name="sonarr_quality_profile_id">
+                                <option value="{{ config.sonarr_quality_profile_id }}">Profile {{ config.sonarr_quality_profile_id }}</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card" id="radarr_card">
+                <div class="card-header">
+                    <h2>Radarr</h2>
+                    <label class="toggle">
+                        <input type="checkbox" id="radarr_enabled" name="radarr_enabled" {{ 'checked' if config.radarr_enabled else '' }} onchange="toggleCard('radarr')">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <div id="radarr_fields">
+                    <div class="field">
+                        <label for="radarr_url">URL</label>
+                        <input type="text" id="radarr_url" name="radarr_url" placeholder="http://radarr:7878" value="{{ config.radarr_url }}">
+                    </div>
+                    <div class="field">
+                        <label for="radarr_api_key">API Key</label>
+                        <input type="password" id="radarr_api_key" name="radarr_api_key" placeholder="API key" value="{{ config.radarr_api_key }}">
+                    </div>
+                    <button type="button" class="btn-fetch" onclick="fetchOptions('radarr')">Connect & load options</button>
+                    <div class="row" style="margin-top: 1rem;">
+                        <div class="field">
+                            <label for="radarr_root_folder">Root Folder</label>
+                            <select id="radarr_root_folder" name="radarr_root_folder">
+                                <option value="{{ config.radarr_root_folder }}">{{ config.radarr_root_folder }}</option>
+                            </select>
+                        </div>
+                        <div class="field">
+                            <label for="radarr_quality_profile_id">Quality Profile</label>
+                            <select id="radarr_quality_profile_id" name="radarr_quality_profile_id">
+                                <option value="{{ config.radarr_quality_profile_id }}">Profile {{ config.radarr_quality_profile_id }}</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>Schedule</h2>
+                <div class="field">
+                    <label for="sync_interval_minutes">Sync interval (minutes)</label>
+                    <input type="number" id="sync_interval_minutes" name="sync_interval_minutes" value="{{ config.sync_interval_minutes }}" min="1">
+                </div>
+            </div>
+
+            <div class="actions">
+                <button type="submit" class="btn-save">Save Settings</button>
+                <button type="button" class="btn-sync" id="syncBtn">Sync Now</button>
+            </div>
+            <div class="status" id="status"></div>
+        </form>
+
+        <div class="card" style="margin-top: 1.5rem;">
+            <h2>Log</h2>
+            <div class="log-box" id="logBox">Loading...</div>
+        </div>
+    </div>
+
+    <script>
+        const status = document.getElementById('status');
+
+        function toggleCard(service) {
+            const checked = document.getElementById(`${service}_enabled`).checked;
+            const card = document.getElementById(`${service}_card`);
+            const fields = document.getElementById(`${service}_fields`);
+            if (checked) {
+                card.classList.remove('disabled');
+                fields.style.pointerEvents = '';
+            } else {
+                card.classList.add('disabled');
+                fields.style.pointerEvents = 'none';
+            }
+        }
+        // Apply initial state
+        toggleCard('sonarr');
+        toggleCard('radarr');
+
+        async function fetchOptions(service) {
+            const url = document.getElementById(`${service}_url`).value;
+            const apiKey = document.getElementById(`${service}_api_key`).value;
+            if (!url || !apiKey) {
+                status.textContent = `Fill in ${service} URL and API key first.`;
+                status.className = 'status err';
+                return;
+            }
+            status.textContent = `Connecting to ${service}...`;
+            status.className = 'status ok';
+            try {
+                const resp = await fetch('/api/fetch-options', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ url, api_key: apiKey })
+                });
+                const data = await resp.json();
+
+                const folderSelect = document.getElementById(`${service}_root_folder`);
+                const profileSelect = document.getElementById(`${service}_quality_profile_id`);
+                const currentFolder = folderSelect.value;
+                const currentProfile = profileSelect.value;
+
+                if (data.root_folders) {
+                    folderSelect.innerHTML = '';
+                    data.root_folders.forEach(rf => {
+                        const opt = document.createElement('option');
+                        opt.value = rf.path;
+                        opt.textContent = rf.path;
+                        if (rf.path === currentFolder) opt.selected = true;
+                        folderSelect.appendChild(opt);
+                    });
+                } else if (data.root_folders_error) {
+                    status.textContent = `Root folders error: ${data.root_folders_error}`;
+                    status.className = 'status err';
+                    return;
+                }
+
+                if (data.quality_profiles) {
+                    profileSelect.innerHTML = '';
+                    data.quality_profiles.forEach(qp => {
+                        const opt = document.createElement('option');
+                        opt.value = qp.id;
+                        opt.textContent = qp.name;
+                        if (String(qp.id) === String(currentProfile)) opt.selected = true;
+                        profileSelect.appendChild(opt);
+                    });
+                } else if (data.quality_profiles_error) {
+                    status.textContent = `Quality profiles error: ${data.quality_profiles_error}`;
+                    status.className = 'status err';
+                    return;
+                }
+
+                status.textContent = `Connected to ${service}!`;
+                status.className = 'status ok';
+            } catch {
+                status.textContent = `Failed to connect to ${service}`;
+                status.className = 'status err';
+            }
+        }
+
+        document.getElementById('configForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const data = Object.fromEntries(new FormData(e.target));
+            data.sonarr_enabled = document.getElementById('sonarr_enabled').checked;
+            data.radarr_enabled = document.getElementById('radarr_enabled').checked;
+            data.sonarr_quality_profile_id = parseInt(data.sonarr_quality_profile_id) || 1;
+            data.radarr_quality_profile_id = parseInt(data.radarr_quality_profile_id) || 1;
+            data.sync_interval_minutes = parseInt(data.sync_interval_minutes) || 60;
+            try {
+                const resp = await fetch('/api/config', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) });
+                if (resp.ok) { status.textContent = 'Settings saved!'; status.className = 'status ok'; }
+                else { status.textContent = 'Failed to save'; status.className = 'status err'; }
+            } catch { status.textContent = 'Connection error'; status.className = 'status err'; }
+        });
+
+        document.getElementById('syncBtn').addEventListener('click', async () => {
+            status.textContent = 'Sync started...'; status.className = 'status ok';
+            try {
+                const resp = await fetch('/api/sync', { method: 'POST' });
+                const data = await resp.json();
+                status.textContent = data.message; status.className = resp.ok ? 'status ok' : 'status err';
+            } catch { status.textContent = 'Connection error'; status.className = 'status err'; }
+        });
+
+        async function refreshLog() {
+            try {
+                const resp = await fetch('/api/logs');
+                const data = await resp.json();
+                const box = document.getElementById('logBox');
+                box.textContent = data.logs.join('\n') || 'No logs yet.';
+                box.scrollTop = box.scrollHeight;
+            } catch {}
+        }
+        refreshLog();
+        setInterval(refreshLog, 5000);
+    </script>
+</body>
+</html>
