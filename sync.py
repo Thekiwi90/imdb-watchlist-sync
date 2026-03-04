@@ -98,30 +98,33 @@ def fetch_imdb_watchlist(cfg: dict) -> list[str]:
 
     log.info("Fetching IMDb watchlist for user %s", cfg["imdb_user_id"])
     imdb_ids: list[str] = []
-    page = 1
+    start = 1
+    page_size = 250
 
     while True:
-        params = {"page": page} if page > 1 else {}
+        params = {"start": start, "sort": "date_added,desc"}
         try:
             resp = requests.get(url, headers=headers, params=params, timeout=30)
             resp.raise_for_status()
         except requests.RequestException as e:
-            log.error("Failed to fetch IMDb watchlist page %d: %s", page, e)
+            log.error("Failed to fetch IMDb watchlist (start=%d): %s", start, e)
             break
 
-        soup = BeautifulSoup(resp.text, "html.parser")
         found = re.findall(r"(tt\d{7,})", resp.text)
         unique = list(dict.fromkeys(found))
+        before = len(imdb_ids)
         imdb_ids.extend(unique)
+        imdb_ids = list(dict.fromkeys(imdb_ids))
+        new_count = len(imdb_ids) - before
 
-        next_link = soup.select_one("a.lister-page-next")
-        if next_link:
-            page += 1
-        else:
+        log.info("Page start=%d: found %d IDs (%d new)", start, len(unique), new_count)
+
+        if new_count == 0 or len(unique) < page_size:
             break
 
-    imdb_ids = list(dict.fromkeys(imdb_ids))
-    log.info("Found %d IMDb IDs on watchlist", len(imdb_ids))
+        start += page_size
+
+    log.info("Found %d total IMDb IDs on watchlist", len(imdb_ids))
     return imdb_ids
 
 

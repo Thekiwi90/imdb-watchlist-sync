@@ -8,6 +8,7 @@ import schedule
 from sync import load_config, save_config, config_is_valid, sync, sync_log, sync_stats
 
 log = logging.getLogger(__name__)
+logging.getLogger("werkzeug").setLevel(logging.WARNING)
 app = Flask(__name__)
 
 # --- Background scheduler ---
