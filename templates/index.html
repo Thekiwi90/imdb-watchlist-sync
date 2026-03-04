@@ -42,6 +42,15 @@
             background: #0a0a1a; border-radius: 8px; padding: 1rem; font-family: 'SF Mono', Monaco, Consolas, monospace;
             font-size: 0.8rem; max-height: 300px; overflow-y: auto; white-space: pre-wrap; line-height: 1.5; color: #8888a0;
         }
+        .stats { display: flex; gap: 1rem; flex-wrap: wrap; }
+        .stat-box {
+            flex: 1; min-width: 120px; background: #0f3460; border-radius: 8px; padding: 0.8rem; text-align: center;
+        }
+        .stat-box .stat-value { font-size: 1.5rem; font-weight: 700; color: #f5c518; }
+        .stat-box .stat-label { font-size: 0.75rem; color: #8888a0; margin-top: 0.2rem; }
+        .stat-box.sonarr .stat-value { color: #4ecca3; }
+        .stat-box.radarr .stat-value { color: #e74c3c; }
+        .stat-time { width: 100%; text-align: center; font-size: 0.8rem; color: #8888a0; margin-top: 0.5rem; }
         /* Toggle switch */
         .toggle { position: relative; display: inline-block; width: 44px; height: 24px; }
         .toggle input { opacity: 0; width: 0; height: 0; }
@@ -154,6 +163,11 @@
             </div>
             <div class="status" id="status"></div>
         </form>
+
+        <div class="card" style="margin-top: 1.5rem;" id="statsCard">
+            <h2>Last Sync</h2>
+            <div class="stats" id="statsBox">No sync yet.</div>
+        </div>
 
         <div class="card" style="margin-top: 1.5rem;">
             <h2>Log</h2>
@@ -274,8 +288,41 @@
                 box.scrollTop = box.scrollHeight;
             } catch {}
         }
+        async function refreshStats() {
+            try {
+                const resp = await fetch('/api/stats');
+                const s = await resp.json();
+                const box = document.getElementById('statsBox');
+                if (!s.last_sync) {
+                    box.textContent = 'No sync yet.';
+                    return;
+                }
+                box.innerHTML = `
+                    <div class="stat-box">
+                        <div class="stat-value">${s.imdb_total}</div>
+                        <div class="stat-label">IMDb items</div>
+                    </div>
+                    <div class="stat-box sonarr">
+                        <div class="stat-value">${s.sonarr_found}</div>
+                        <div class="stat-label">Sonarr found<br><small>${s.sonarr_existing} existing / ${s.sonarr_added} new</small></div>
+                    </div>
+                    <div class="stat-box radarr">
+                        <div class="stat-value">${s.radarr_found}</div>
+                        <div class="stat-label">Radarr found<br><small>${s.radarr_existing} existing / ${s.radarr_added} new</small></div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-value">${s.not_found}</div>
+                        <div class="stat-label">Not matched</div>
+                    </div>
+                    <div class="stat-time">Last sync: ${s.last_sync}</div>
+                `;
+            } catch {}
+        }
+
         refreshLog();
+        refreshStats();
         setInterval(refreshLog, 5000);
+        setInterval(refreshStats, 5000);
     </script>
 </body>
 </html>

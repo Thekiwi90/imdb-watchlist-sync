@@ -58,9 +58,21 @@ def config_is_valid(cfg: dict) -> bool:
     return True
 
 
-# --- Sync log buffer for web UI ---
+# --- Sync log buffer and stats for web UI ---
 sync_log: list[str] = []
 MAX_LOG_LINES = 200
+
+sync_stats: dict = {
+    "imdb_total": 0,
+    "sonarr_found": 0,
+    "sonarr_added": 0,
+    "sonarr_existing": 0,
+    "radarr_found": 0,
+    "radarr_added": 0,
+    "radarr_existing": 0,
+    "not_found": 0,
+    "last_sync": None,
+}
 
 
 class LogCapture(logging.Handler):
@@ -245,15 +257,20 @@ def sync(cfg: dict | None = None):
 
     added_series = 0
     added_movies = 0
-    skipped = 0
+    sonarr_found = 0
+    sonarr_existing = 0
+    radarr_found = 0
+    radarr_existing = 0
+    not_found = 0
 
     for imdb_id in imdb_ids:
         if sonarr_on:
             series = lookup_sonarr(cfg, imdb_id)
             if series and series.get("tvdbId"):
+                sonarr_found += 1
                 if series["tvdbId"] in existing_tvdb:
                     log.info("Skipping series (already in Sonarr): %s", series.get("title"))
-                    skipped += 1
+                    sonarr_existing += 1
                 else:
                     if add_to_sonarr(cfg, series):
                         existing_tvdb.add(series["tvdbId"])
@@ -263,18 +280,33 @@ def sync(cfg: dict | None = None):
         if radarr_on:
             movie = lookup_radarr(cfg, imdb_id)
             if movie and movie.get("tmdbId"):
+                radarr_found += 1
                 if movie["tmdbId"] in existing_tmdb:
                     log.info("Skipping movie (already in Radarr): %s", movie.get("title"))
-                    skipped += 1
+                    radarr_existing += 1
                 else:
                     if add_to_radarr(cfg, movie):
                         existing_tmdb.add(movie["tmdbId"])
                         added_movies += 1
                 continue
 
+        not_found += 1
         log.warning("No match found for %s in Sonarr or Radarr", imdb_id)
 
+    # Update stats
+    from datetime import datetime
+    sync_stats["imdb_total"] = len(imdb_ids)
+    sync_stats["sonarr_found"] = sonarr_found
+    sync_stats["sonarr_added"] = added_series
+    sync_stats["sonarr_existing"] = sonarr_existing
+    sync_stats["radarr_found"] = radarr_found
+    sync_stats["radarr_added"] = added_movies
+    sync_stats["radarr_existing"] = radarr_existing
+    sync_stats["not_found"] = not_found
+    sync_stats["last_sync"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
     log.info(
-        "--- Sync complete: %d series added, %d movies added, %d skipped ---",
-        added_series, added_movies, skipped,
+        "--- Sync complete: IMDb: %d | Sonarr: %d found (%d new, %d existing) | Radarr: %d found (%d new, %d existing) | Not matched: %d ---",
+        len(imdb_ids), sonarr_found, added_series, sonarr_existing,
+        radarr_found, added_movies, radarr_existing, not_found,
     )

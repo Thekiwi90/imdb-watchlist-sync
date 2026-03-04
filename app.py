@@ -5,7 +5,7 @@ import requests
 from flask import Flask, render_template, request, jsonify
 import schedule
 
-from sync import load_config, save_config, config_is_valid, sync, sync_log
+from sync import load_config, save_config, config_is_valid, sync, sync_log, sync_stats
 
 log = logging.getLogger(__name__)
 app = Flask(__name__)
@@ -83,6 +83,11 @@ def api_fetch_options():
 @app.route("/api/logs")
 def api_logs():
     return jsonify({"logs": list(sync_log)})
+
+
+@app.route("/api/stats")
+def api_stats():
+    return jsonify(sync_stats)
 
 
 if __name__ == "__main__":
