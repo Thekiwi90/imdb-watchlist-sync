@@ -89,40 +89,130 @@ logging.getLogger().addHandler(log_capture)
 
 
 def fetch_imdb_watchlist(cfg: dict) -> list[str]:
-    url = f"https://www.imdb.com/user/{cfg['imdb_user_id']}/watchlist/"
+    """Fetch all IMDb IDs from a public watchlist."""
+    user_id = cfg["imdb_user_id"]
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                       "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Upgrade-Insecure-Requests": "1",
     }
 
-    log.info("Fetching IMDb watchlist for user %s", cfg["imdb_user_id"])
+    log.info("Fetching IMDb watchlist for user %s", user_id)
+
+    # Use a session for cookies (IMDb anti-bot)
+    session = requests.Session()
+    session.headers.update(headers)
+
+    # Step 0: Visit imdb.com to get cookies
+    try:
+        session.get("https://www.imdb.com/", timeout=15)
+    except requests.RequestException:
+        pass
+
+    # Step 1: Get watchlist page to find list ID
+    watchlist_url = f"https://www.imdb.com/user/{user_id}/watchlist/"
+    try:
+        resp = session.get(watchlist_url, timeout=30)
+        resp.raise_for_status()
+    except requests.RequestException as e:
+        log.error("Failed to fetch IMDb watchlist page: %s", e)
+        return []
+
+    list_match = re.search(r"(ls\d+)", resp.text)
+    if not list_match:
+        log.error("Could not find watchlist list ID")
+        found = re.findall(r"(tt\d{7,})", resp.text)
+        return list(dict.fromkeys(found))
+
+    list_id = list_match.group(1)
+    log.info("Found watchlist list ID: %s", list_id)
+
+    # Step 2: Use IMDb GraphQL API to fetch all items with pagination
     imdb_ids: list[str] = []
-    start = 1
+    after = ""
+    page_num = 1
     page_size = 250
 
     while True:
-        params = {"start": start, "sort": "date_added,desc"}
+        query = """
+        query WatchlistItems($listId: ID!, $first: Int!, $after: ID) {
+          list(id: $listId) {
+            items(first: $first, after: $after) {
+              total
+              edges {
+                node {
+                  item {
+                    ... on Title {
+                      id
+                    }
+                  }
+                }
+              }
+              pageInfo {
+                hasNextPage
+                endCursor
+              }
+            }
+          }
+        }
+        """
+        variables = {"listId": list_id, "first": page_size}
+        if after:
+            variables["after"] = after
+
         try:
-            resp = requests.get(url, headers=headers, params=params, timeout=30)
+            resp = session.post(
+                "https://graphql.imdb.com/",
+                json={"query": query, "variables": variables},
+                headers={
+                    "Content-Type": "application/json",
+                    "Referer": "https://www.imdb.com/",
+                },
+                timeout=30,
+            )
             resp.raise_for_status()
+            data = resp.json()
         except requests.RequestException as e:
-            log.error("Failed to fetch IMDb watchlist (start=%d): %s", start, e)
+            log.error("GraphQL request failed (page %d): %s", page_num, e)
+            break
+        except Exception as e:
+            log.error("Failed to parse GraphQL response (page %d): %s", page_num, e)
             break
 
-        found = re.findall(r"(tt\d{7,})", resp.text)
-        unique = list(dict.fromkeys(found))
-        before = len(imdb_ids)
-        imdb_ids.extend(unique)
-        imdb_ids = list(dict.fromkeys(imdb_ids))
-        new_count = len(imdb_ids) - before
+        # Extract IDs from response
+        try:
+            items_data = data["data"]["list"]["items"]
+            total = items_data.get("total", "?")
+            edges = items_data.get("edges", [])
+            page_info = items_data.get("pageInfo", {})
 
-        log.info("Page start=%d: found %d IDs (%d new)", start, len(unique), new_count)
+            for edge in edges:
+                title_id = edge.get("node", {}).get("item", {}).get("id", "")
+                if title_id.startswith("tt"):
+                    imdb_ids.append(title_id)
 
-        if new_count == 0 or len(unique) < page_size:
+            imdb_ids = list(dict.fromkeys(imdb_ids))
+            log.info("Page %d: fetched %d items (%d total on list, %d unique so far)",
+                     page_num, len(edges), total, len(imdb_ids))
+
+            if page_info.get("hasNextPage") and page_info.get("endCursor"):
+                after = page_info["endCursor"]
+                page_num += 1
+            else:
+                break
+        except (KeyError, TypeError) as e:
+            log.error("Unexpected GraphQL response structure (page %d): %s", page_num, e)
+            # Fallback: extract tt IDs from raw response
+            found = re.findall(r"(tt\d{7,})", resp.text)
+            imdb_ids.extend(found)
+            imdb_ids = list(dict.fromkeys(imdb_ids))
             break
-
-        start += page_size
 
     log.info("Found %d total IMDb IDs on watchlist", len(imdb_ids))
     return imdb_ids
@@ -194,7 +284,7 @@ def add_to_sonarr(cfg: dict, series: dict) -> bool:
     payload = {
         "title": series.get("title", "Unknown"),
         "tvdbId": series["tvdbId"],
-        "qualityProfileId": cfg["sonarr_quality_profile_id"],
+        "qualityProfileId": int(cfg["sonarr_quality_profile_id"]),
         "rootFolderPath": cfg["sonarr_root_folder"],
         "monitored": True,
         "addOptions": {"searchForMissingEpisodes": True},
@@ -210,7 +300,10 @@ def add_to_sonarr(cfg: dict, series: dict) -> bool:
         log.info("Added series to Sonarr: %s", payload["title"])
         return True
     except requests.RequestException as e:
-        log.error("Failed to add series '%s' to Sonarr: %s", payload["title"], e)
+        body = ""
+        if hasattr(e, "response") and e.response is not None:
+            body = e.response.text[:200]
+        log.error("Failed to add series '%s' to Sonarr: %s %s", payload["title"], e, body)
         return False
 
 
@@ -218,7 +311,7 @@ def add_to_radarr(cfg: dict, movie: dict) -> bool:
     payload = {
         "title": movie.get("title", "Unknown"),
         "tmdbId": movie["tmdbId"],
-        "qualityProfileId": cfg["radarr_quality_profile_id"],
+        "qualityProfileId": int(cfg["radarr_quality_profile_id"]),
         "rootFolderPath": cfg["radarr_root_folder"],
         "monitored": True,
         "addOptions": {"searchForMovie": True},
@@ -234,7 +327,10 @@ def add_to_radarr(cfg: dict, movie: dict) -> bool:
         log.info("Added movie to Radarr: %s", payload["title"])
         return True
     except requests.RequestException as e:
-        log.error("Failed to add movie '%s' to Radarr: %s", payload["title"], e)
+        body = ""
+        if hasattr(e, "response") and e.response is not None:
+            body = e.response.text[:200]
+        log.error("Failed to add '%s' to Radarr: %s %s", payload["title"], e, body)
         return False
 
 
