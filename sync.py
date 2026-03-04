@@ -280,7 +280,8 @@ def lookup_radarr(cfg: dict, imdb_id: str) -> dict | None:
     return None
 
 
-def add_to_sonarr(cfg: dict, series: dict) -> bool:
+def add_to_sonarr(cfg: dict, series: dict):
+    """Returns True if added, 'exists' if already exists, False on error."""
     payload = {
         "title": series.get("title", "Unknown"),
         "tvdbId": series["tvdbId"],
@@ -302,12 +303,16 @@ def add_to_sonarr(cfg: dict, series: dict) -> bool:
     except requests.RequestException as e:
         body = ""
         if hasattr(e, "response") and e.response is not None:
-            body = e.response.text[:200]
+            body = e.response.text[:300]
+            if "already been added" in body.lower() or "ExistsValidator" in body:
+                log.info("Already in Sonarr: %s", payload["title"])
+                return "exists"
         log.error("Failed to add series '%s' to Sonarr: %s %s", payload["title"], e, body)
         return False
 
 
-def add_to_radarr(cfg: dict, movie: dict) -> bool:
+def add_to_radarr(cfg: dict, movie: dict):
+    """Returns True if added, 'exists' if already exists, False on error."""
     payload = {
         "title": movie.get("title", "Unknown"),
         "tmdbId": movie["tmdbId"],
@@ -329,7 +334,10 @@ def add_to_radarr(cfg: dict, movie: dict) -> bool:
     except requests.RequestException as e:
         body = ""
         if hasattr(e, "response") and e.response is not None:
-            body = e.response.text[:200]
+            body = e.response.text[:300]
+            if "already been added" in body.lower() or "ExistsValidator" in body:
+                log.info("Already in Radarr: %s", payload["title"])
+                return "exists"
         log.error("Failed to add '%s' to Radarr: %s %s", payload["title"], e, body)
         return False
 
@@ -371,7 +379,10 @@ def sync(cfg: dict | None = None):
                     log.info("Skipping series (already in Sonarr): %s", series.get("title"))
                     sonarr_existing += 1
                 else:
-                    if add_to_sonarr(cfg, series):
+                    result = add_to_sonarr(cfg, series)
+                    if result == "exists":
+                        sonarr_existing += 1
+                    elif result:
                         existing_tvdb.add(series["tvdbId"])
                         added_series += 1
                 continue
@@ -384,7 +395,10 @@ def sync(cfg: dict | None = None):
                     log.info("Skipping movie (already in Radarr): %s", movie.get("title"))
                     radarr_existing += 1
                 else:
-                    if add_to_radarr(cfg, movie):
+                    result = add_to_radarr(cfg, movie)
+                    if result == "exists":
+                        radarr_existing += 1
+                    elif result:
                         existing_tmdb.add(movie["tmdbId"])
                         added_movies += 1
                 continue
