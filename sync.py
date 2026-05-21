@@ -17,6 +17,7 @@ CONFIG_PATH = os.environ.get("CONFIG_PATH", "/app/data/config.json")
 
 DEFAULT_CONFIG = {
     "imdb_user_id": "",
+    "imdb_list_id": "",
     "sonarr_enabled": True,
     "sonarr_url": "http://sonarr:8989",
     "sonarr_api_key": "",
@@ -130,10 +131,10 @@ def fetch_imdb_watchlist(cfg: dict) -> list[str]:
             pass
 
     # Step 1: Find watchlist list ID.
-    # Prefer explicit IMDB_LIST_ID env var (skips WAF-blocked /user/.../watchlist/ page).
-    list_id = os.environ.get("IMDB_LIST_ID", "").strip()
+    # Prefer config value, then env var, then fall back to scraping (WAF-blocked).
+    list_id = (cfg.get("imdb_list_id") or os.environ.get("IMDB_LIST_ID", "")).strip()
     if list_id:
-        log.info("Using IMDB_LIST_ID from env: %s", list_id)
+        log.info("Using configured list ID: %s", list_id)
     else:
         watchlist_url = f"https://www.imdb.com/user/{user_id}/watchlist/"
         try:
