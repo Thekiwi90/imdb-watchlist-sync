@@ -109,11 +109,25 @@ def fetch_imdb_watchlist(cfg: dict) -> list[str]:
     session = requests.Session()
     session.headers.update(headers)
 
-    # Step 0: Visit imdb.com to get cookies
-    try:
-        session.get("https://www.imdb.com/", timeout=15)
-    except requests.RequestException:
-        pass
+    # Load auth cookies from env if user has provided a logged-in session.
+    # Anonymous scraping is blocked by AWS WAF (HTTP 202 challenge page);
+    # passing real cookies bypasses it.
+    cookie_str = os.environ.get("IMDB_COOKIES", "").strip()
+    if cookie_str:
+        loaded = 0
+        for kv in cookie_str.split(";"):
+            kv = kv.strip()
+            if "=" in kv:
+                k, _, v = kv.partition("=")
+                session.cookies.set(k.strip(), v.strip(), domain=".imdb.com")
+                loaded += 1
+        log.info("Loaded %d IMDb cookies from IMDB_COOKIES env", loaded)
+    else:
+        # Step 0 fallback: visit imdb.com to seed any anonymous cookies
+        try:
+            session.get("https://www.imdb.com/", timeout=15)
+        except requests.RequestException:
+            pass
 
     # Step 1: Get watchlist page to find list ID
     watchlist_url = f"https://www.imdb.com/user/{user_id}/watchlist/"
