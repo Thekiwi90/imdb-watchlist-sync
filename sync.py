@@ -129,23 +129,28 @@ def fetch_imdb_watchlist(cfg: dict) -> list[str]:
         except requests.RequestException:
             pass
 
-    # Step 1: Get watchlist page to find list ID
-    watchlist_url = f"https://www.imdb.com/user/{user_id}/watchlist/"
-    try:
-        resp = session.get(watchlist_url, timeout=30)
-        resp.raise_for_status()
-    except requests.RequestException as e:
-        log.error("Failed to fetch IMDb watchlist page: %s", e)
-        return []
+    # Step 1: Find watchlist list ID.
+    # Prefer explicit IMDB_LIST_ID env var (skips WAF-blocked /user/.../watchlist/ page).
+    list_id = os.environ.get("IMDB_LIST_ID", "").strip()
+    if list_id:
+        log.info("Using IMDB_LIST_ID from env: %s", list_id)
+    else:
+        watchlist_url = f"https://www.imdb.com/user/{user_id}/watchlist/"
+        try:
+            resp = session.get(watchlist_url, timeout=30)
+            resp.raise_for_status()
+        except requests.RequestException as e:
+            log.error("Failed to fetch IMDb watchlist page: %s", e)
+            return []
 
-    list_match = re.search(r"(ls\d+)", resp.text)
-    if not list_match:
-        log.error("Could not find watchlist list ID")
-        found = re.findall(r"(tt\d{7,})", resp.text)
-        return list(dict.fromkeys(found))
+        list_match = re.search(r"(ls\d+)", resp.text)
+        if not list_match:
+            log.error("Could not find watchlist list ID (AWS WAF likely blocked the page — set IMDB_LIST_ID env var instead)")
+            found = re.findall(r"(tt\d{7,})", resp.text)
+            return list(dict.fromkeys(found))
 
-    list_id = list_match.group(1)
-    log.info("Found watchlist list ID: %s", list_id)
+        list_id = list_match.group(1)
+        log.info("Found watchlist list ID: %s", list_id)
 
     # Step 2: Use IMDb GraphQL API to fetch all items with pagination
     imdb_ids: list[str] = []
