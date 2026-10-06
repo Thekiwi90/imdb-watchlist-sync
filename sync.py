@@ -1,3 +1,4 @@
+import copy
 import json
 import os
 import re
@@ -16,8 +17,8 @@ log = logging.getLogger(__name__)
 CONFIG_PATH = os.environ.get("CONFIG_PATH", "/app/data/config.json")
 
 DEFAULT_CONFIG = {
-    "imdb_user_id": "",
-    "imdb_list_id": "",
+    # Each entry: {"name": str, "user_id": "ur...", "list_id": "ls..."}
+    "imdb_watchlists": [],
     "sonarr_enabled": True,
     "sonarr_url": "http://sonarr:8989",
     "sonarr_api_key": "",
@@ -33,20 +34,49 @@ DEFAULT_CONFIG = {
 
 
 def load_config() -> dict:
+    cfg = copy.deepcopy(DEFAULT_CONFIG)
     if os.path.exists(CONFIG_PATH):
         with open(CONFIG_PATH) as f:
-            return {**DEFAULT_CONFIG, **json.load(f)}
-    return dict(DEFAULT_CONFIG)
+            cfg.update(json.load(f))
+
+    # Migrate legacy single-watchlist config (imdb_user_id / imdb_list_id)
+    legacy_user = cfg.pop("imdb_user_id", "") or ""
+    legacy_list = cfg.pop("imdb_list_id", "") or os.environ.get("IMDB_LIST_ID", "")
+    if not cfg["imdb_watchlists"] and (legacy_user or legacy_list):
+        cfg["imdb_watchlists"] = [{"name": "", "user_id": legacy_user, "list_id": legacy_list}]
+
+    cfg["imdb_watchlists"] = [w for w in cfg["imdb_watchlists"] if watchlist_is_valid(w)]
+    return cfg
 
 
 def save_config(cfg: dict):
+    cfg = dict(cfg)
+    cfg.pop("imdb_user_id", None)
+    cfg.pop("imdb_list_id", None)
+    cfg["imdb_watchlists"] = [
+        {
+            "name": (w.get("name") or "").strip(),
+            "user_id": (w.get("user_id") or "").strip(),
+            "list_id": (w.get("list_id") or "").strip(),
+        }
+        for w in cfg.get("imdb_watchlists") or []
+        if isinstance(w, dict) and watchlist_is_valid(w)
+    ]
     os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
     with open(CONFIG_PATH, "w") as f:
         json.dump(cfg, f, indent=2)
 
 
+def watchlist_is_valid(w: dict) -> bool:
+    return bool((w.get("user_id") or "").strip() or (w.get("list_id") or "").strip())
+
+
+def watchlist_label(w: dict) -> str:
+    return w.get("name") or w.get("list_id") or w.get("user_id") or "?"
+
+
 def config_is_valid(cfg: dict) -> bool:
-    if not cfg.get("imdb_user_id"):
+    if not any(watchlist_is_valid(w) for w in cfg.get("imdb_watchlists", [])):
         return False
     sonarr_on = cfg.get("sonarr_enabled", True)
     radarr_on = cfg.get("radarr_enabled", True)
@@ -64,6 +94,7 @@ sync_log: list[str] = []
 MAX_LOG_LINES = 200
 
 sync_stats: dict = {
+    "watchlist_count": 0,
     "imdb_total": 0,
     "sonarr_found": 0,
     "sonarr_added": 0,
@@ -89,9 +120,10 @@ log_capture.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(messag
 logging.getLogger().addHandler(log_capture)
 
 
-def fetch_imdb_watchlist(cfg: dict) -> list[str]:
+def fetch_imdb_watchlist(user_id: str, list_id: str = "") -> list[str]:
     """Fetch all IMDb IDs from a public watchlist."""
-    user_id = cfg["imdb_user_id"]
+    user_id = (user_id or "").strip()
+    list_id = (list_id or "").strip()
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                        "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -104,7 +136,7 @@ def fetch_imdb_watchlist(cfg: dict) -> list[str]:
         "Upgrade-Insecure-Requests": "1",
     }
 
-    log.info("Fetching IMDb watchlist for user %s", user_id)
+    log.info("Fetching IMDb watchlist (user %s, list %s)", user_id or "-", list_id or "-")
 
     # Use a session for cookies (IMDb anti-bot)
     session = requests.Session()
@@ -131,8 +163,7 @@ def fetch_imdb_watchlist(cfg: dict) -> list[str]:
             pass
 
     # Step 1: Find watchlist list ID.
-    # Prefer config value, then env var, then fall back to scraping (WAF-blocked).
-    list_id = (cfg.get("imdb_list_id") or os.environ.get("IMDB_LIST_ID", "")).strip()
+    # Prefer the configured value, then fall back to scraping (WAF-blocked).
     if list_id:
         log.info("Using configured list ID: %s", list_id)
     else:
@@ -146,7 +177,7 @@ def fetch_imdb_watchlist(cfg: dict) -> list[str]:
 
         list_match = re.search(r"(ls\d+)", resp.text)
         if not list_match:
-            log.error("Could not find watchlist list ID (AWS WAF likely blocked the page — set IMDB_LIST_ID env var instead)")
+            log.error("Could not find watchlist list ID (AWS WAF likely blocked the page — set the list ID in the config instead)")
             found = re.findall(r"(tt\d{7,})", resp.text)
             return list(dict.fromkeys(found))
 
@@ -374,7 +405,16 @@ def sync(cfg: dict | None = None):
     log.info("--- Starting sync (Sonarr: %s, Radarr: %s) ---",
              "ON" if sonarr_on else "OFF", "ON" if radarr_on else "OFF")
 
-    imdb_ids = fetch_imdb_watchlist(cfg)
+    watchlists = [w for w in cfg.get("imdb_watchlists", []) if watchlist_is_valid(w)]
+    imdb_ids: list[str] = []
+    for w in watchlists:
+        ids = fetch_imdb_watchlist(w.get("user_id", ""), w.get("list_id", ""))
+        log.info("Watchlist '%s': %d items", watchlist_label(w), len(ids))
+        imdb_ids.extend(ids)
+    imdb_ids = list(dict.fromkeys(imdb_ids))
+    if len(watchlists) > 1:
+        log.info("Combined %d watchlists into %d unique IMDb IDs", len(watchlists), len(imdb_ids))
+
     if not imdb_ids:
         log.info("No IMDb IDs found, nothing to do.")
         return
@@ -428,6 +468,7 @@ def sync(cfg: dict | None = None):
 
     # Update stats
     from datetime import datetime
+    sync_stats["watchlist_count"] = len(watchlists)
     sync_stats["imdb_total"] = len(imdb_ids)
     sync_stats["sonarr_found"] = sonarr_found
     sync_stats["sonarr_added"] = added_series
